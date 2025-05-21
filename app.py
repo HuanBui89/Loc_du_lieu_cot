@@ -1,111 +1,67 @@
-import re
-import pandas as pd
-import streamlit as st
-from io import BytesIO
-
 def parse_data(input_text):
-    try:
-        entries = []
-        current = {"Mã hàng": "", "Tên": "", "SĐT": "", "Địa chỉ": "", "Tiền thu hộ": ""}
+    entries = []
+    current = {"Mã hàng": "", "Tên": "", "SĐT": "", "Địa chỉ": "", "Tiền thu hộ": ""}
+    
+    lines = input_text.strip().split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
         
-        lines = input_text.strip().split("\n")
-        for line in lines:
-            line = line.strip()
+        # Xử lý MÃ HÀNG (có thể gộp nhiều mã)
+        if re.match(r"mã\s+\d+", line, re.IGNORECASE):
+            if current["Mã hàng"]:  # Lưu entry trước đó
+                entries.append(current)
+                current = {"Mã hàng": "", "Tên": "", "SĐT": "", "Địa chỉ": "", "Tiền thu hộ": ""}
             
-            # Xử lý MÃ HÀNG
-            if re.match(r"mã\s+\d+", line, re.IGNORECASE):
-                if current["Mã hàng"]:
-                    entries.append(current)
-                    current = {"Mã hàng": "", "Tên": "", "SĐT": "", "Địa chỉ": "", "Tiền thu hộ": ""}
-                
-                ma_list = re.findall(r"\d+", line, re.IGNORECASE)
-                current["Mã hàng"] = "-".join(ma_list)
-                
-                ten = re.split(r"(mã|mÃ)\s*\d+", line, flags=re.IGNORECASE)[-1].strip()
-                if ten and not re.search(r"\d", ten):
-                    current["Tên"] = ten
+            # Tách các mã hàng
+            ma_list = re.findall(r"\d+", line, re.IGNORECASE)
+            current["Mã hàng"] = "-".join(ma_list)
             
-            # Xử lý SĐT
-            elif re.search(r"\d{10,}", line):
-                sdt = re.findall(r"\d{10,}", line)[0]
-                current["SĐT"] = sdt
-            
-            # Xử lý THU HỘ
-            elif "thu" in line.lower():
-                tien = re.findall(r"\d+\.?\d*", line)
-                if tien:
-                    current["Tiền thu hộ"] = tien[0] + ("k" if "k" in line.lower() else "")
-            
-            # Xử lý thông tin khác
+            # Tách tên nếu có trên cùng dòng
+            ten = re.split(r"mã\s*\d+", line, flags=re.IGNORECASE)[-1].strip()
+            if ten and not re.search(r"\d", ten):
+                current["Tên"] = ten
             else:
-                if line and not current["Tên"]:
-                    current["Tên"] = line
-                elif line:
-                    current["Địa chỉ"] += line + " "
+                # Nếu không có tên trên dòng mã, lấy dòng tiếp theo
+                i += 1
+                while i < len(lines) and lines[i].strip() == "":
+                    i += 1
+                if i < len(lines) and not re.search(r"\d{10,}", lines[i]) and "thu" not in lines[i].lower():
+                    current["Tên"] = lines[i].strip()
+                    i += 1
+                else:
+                    i -= 1
         
-        if current["Mã hàng"]:
+        # Xử lý SĐT (ưu tiên số gần nhất trước "thu")
+        elif re.search(r"\d{10,}", line):
+            current["SĐT"] = re.findall(r"\d{10,}", line)[-1]  # Lấy số cuối cùng trong dòng
+        
+        # Xử lý THU HỘ
+        elif "thu" in line.lower():
+            tien = re.findall(r"\d+\.?\d*", line)
+            if tien:
+                current["Tiền thu hộ"] = tien[0] + ("k" if "k" in line.lower() else "")
+            
+            # Khi gặp "thu" thì coi như đã đủ thông tin
             entries.append(current)
+            current = {"Mã hàng": "", "Tên": "", "SĐT": "", "Địa chỉ": "", "Tiền thu hộ": ""}
         
-        df = pd.DataFrame(entries)
-        if not df.empty:
-            df["Tên người nhận"] = df["Mã hàng"] + "_" + df["Tên"]
-            df = df[["Mã hàng", "Tên người nhận", "SĐT", "Địa chỉ", "Tiền thu hộ"]]
-        return df
+        # Xử lý ĐỊA CHỈ (các dòng còn lại)
+        elif line:
+            if not current["Tên"] and not current["Mã hàng"]:
+                current["Tên"] = line
+            else:
+                current["Địa chỉ"] += line + " "
+        
+        i += 1
     
-    except Exception as e:
-        st.error(f"Lỗi khi xử lý dữ liệu: {str(e)}")
-        return pd.DataFrame()
-
-# Giao diện cải tiến
-st.title("🔢 Công cụ xử lý đơn hàng")
-st.write("Dán dữ liệu thô vào ô bên dưới:")
-
-# Hiển thị mẫu dữ liệu
-with st.expander("📋 Xem định dạng mẫu"):
-    st.write("""
-    ```
-    Mã 123 Nguyễn Văn A
-    0987654321
-    123 Đường ABC, Quận 1
-    Thu 150k
+    # Thêm entry cuối cùng nếu còn
+    if current["Mã hàng"]:
+        entries.append(current)
     
-    Mã 456 Mã 789 Trần Thị B
-    0123456789
-    456 Đường XYZ, Quận 2
-    Thu 200
-    ```
-    """)
-
-input_text = st.text_area("Nhập dữ liệu:", height=300, key="input_data")
-
-col1, col2 = st.columns(2)
-with col1:
-    if st.button("Xử lý", type="primary"):
-        if input_text:
-            df = parse_data(input_text)
-            st.session_state.df = df
-        else:
-            st.warning("Vui lòng nhập dữ liệu!")
-
-with col2:
-    if st.button("Xóa dữ liệu"):
-        st.session_state.input_data = ""
-        st.session_state.df = pd.DataFrame()
-        st.rerun()
-
-if "df" in st.session_state and not st.session_state.df.empty:
-    st.success("✅ Xử lý thành công!")
-    edited_df = st.data_editor(st.session_state.df)
-    
-    # Xuất file Excel
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        edited_df.to_excel(writer, index=False, sheet_name='Đơn hàng')
-    output.seek(0)
-    
-    st.download_button(
-        label="📥 Tải xuống Excel",
-        data=output,
-        file_name="danh_sach_don_hang.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    # Tạo DataFrame và định dạng
+    df = pd.DataFrame(entries)
+    if not df.empty:
+        df["Tên người nhận"] = df["Mã hàng"] + "_" + df["Tên"]
+        df = df[["Mã hàng", "Tên người nhận", "SĐT", "Địa chỉ", "Tiền thu hộ"]]
+    return df
